@@ -1,0 +1,290 @@
+name: Build Go CGO Version
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Trigger on version tags like v0.1.0
+    branches:
+      - main      # Trigger on main branch pushes
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  build-go-cgo:
+    name: Build Go CGO x86_64
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache-dependency-path: ntpi_dumper_go_version/go.sum
+      
+      - name: Download and Setup MinGW-w64 (WinLibs)
+        shell: pwsh
+        run: |
+          Write-Host "Downloading WinLibs MinGW-w64..." -ForegroundColor Cyan
+          
+          $mingwUrl = "https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-13.0.0-ucrt-r2/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r2.7z"
+          $mingwDir = "mingw64"
+          $mingwArchive = "mingw.7z"
+          
+          # Download MinGW
+          Write-Host "Downloading from: $mingwUrl" -ForegroundColor Yellow
+          Invoke-WebRequest -Uri $mingwUrl -OutFile $mingwArchive -UseBasicParsing
+          
+          # Extract using 7-Zip (pre-installed on GitHub runners)
+          Write-Host "Extracting MinGW..." -ForegroundColor Yellow
+          & "C:\Program Files\7-Zip\7z.exe" x $mingwArchive -o"C:\" -y
+          
+          # Add to PATH
+          $mingwBinPath = "C:\$mingwDir\bin"
+          Write-Host "Adding to PATH: $mingwBinPath" -ForegroundColor Green
+          echo "$mingwBinPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          
+          # Verify
+          & "$mingwBinPath\gcc.exe" --version
+          Write-Host "✓ MinGW-w64 setup complete" -ForegroundColor Green
+      
+      - name: Download and Setup XZ Utils
+        shell: pwsh
+        run: |
+          Write-Host "Downloading XZ Utils..." -ForegroundColor Cyan
+          
+          $xzUrl = "https://github.com/tukaani-project/xz/releases/download/v5.8.1/xz-5.8.1-windows.7z"
+          $xzArchive = "xz-windows.7z"
+          
+          # Download XZ Utils
+          Write-Host "Downloading from: $xzUrl" -ForegroundColor Yellow
+          Invoke-WebRequest -Uri $xzUrl -OutFile $xzArchive -UseBasicParsing
+          
+          # Extract using 7-Zip
+          Write-Host "Extracting XZ Utils..." -ForegroundColor Yellow
+          New-Item -ItemType Directory -Path "xz_utils" -Force | Out-Null
+          & "C:\Program Files\7-Zip\7z.exe" x $xzArchive -o"xz_utils" -y
+          
+          # Verify extraction
+          $xzBinDir = "xz_utils\bin_x86-64"
+          if (-not (Test-Path "$xzBinDir\liblzma-5.dll")) {
+            Write-Host "Error: liblzma-5.dll not found after extraction" -ForegroundColor Red
+            exit 1
+          }
+          
+          Write-Host "✓ XZ Utils setup complete" -ForegroundColor Green
+          Write-Host "  Location: $xzBinDir" -ForegroundColor Gray
+      
+      - name: Set up build environment
+        shell: pwsh
+        run: |
+          Write-Host "Setting up build environment..." -ForegroundColor Cyan
+          
+          # Navigate to Go project directory
+          Set-Location ntpi_dumper_go_version
+          
+          # Download Go dependencies
+          Write-Host "Downloading Go dependencies..." -ForegroundColor Yellow
+          go mod download
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to download Go dependencies" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "✓ Go dependencies ready" -ForegroundColor Green
+      
+      - name: Build Go CGO version
+        shell: pwsh
+        run: |
+          Write-Host "Building Go CGO version for x86_64..." -ForegroundColor Cyan
+          
+          Set-Location ntpi_dumper_go_version
+          
+          # Set up paths to downloaded XZ Utils
+          $xzInclude = (Resolve-Path "..\xz_utils\include").Path.Replace('\', '/')
+          $xzLib = (Resolve-Path "..\xz_utils\bin_x86-64").Path.Replace('\', '/')
+          
+          # Configure CGO
+          $env:CGO_ENABLED = "1"
+          $env:CGO_CFLAGS = "-I$xzInclude"
+          $env:CGO_LDFLAGS = "-L$xzLib -llzma"
+          
+          # Configure CGO
+          $env:CGO_ENABLED = "1"
+          $env:CGO_CFLAGS = "-I$xzInclude"
+          $env:CGO_LDFLAGS = "-L$xzLib -llzma"
+          
+          # MinGW is already in PATH from previous step
+          # Verify GCC is available
+          $gccPath = (Get-Command gcc -ErrorAction SilentlyContinue).Source
+          if (-not $gccPath) {
+            Write-Host "ERROR: GCC not found in PATH!" -ForegroundColor Red
+            exit 1
+          }
+          
+          Write-Host "CGO Configuration:" -ForegroundColor Yellow
+          Write-Host "  CGO_ENABLED: $env:CGO_ENABLED" -ForegroundColor Gray
+          Write-Host "  CGO_CFLAGS: $env:CGO_CFLAGS" -ForegroundColor Gray
+          Write-Host "  CGO_LDFLAGS: $env:CGO_LDFLAGS" -ForegroundColor Gray
+          Write-Host "  GCC Path: $gccPath" -ForegroundColor Gray
+          
+          # Build
+          $outputName = "ntpi-dumper-cgo.exe"
+          go build -tags cgo -ldflags="-s -w" -o $outputName ./cmd/ntpi-dumper
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Build failed!" -ForegroundColor Red
+            exit 1
+          }
+          
+          Write-Host "✓ Build successful!" -ForegroundColor Green
+          
+          # Copy DLL from downloaded XZ Utils
+          $dllSource = "..\xz_utils\bin_x86-64\liblzma-5.dll"
+          $dllDest = "liblzma-5.dll"
+          Copy-Item $dllSource -Destination $dllDest -Force
+          Write-Host "✓ DLL copied" -ForegroundColor Green
+          
+          # Show file sizes
+          $exeSize = (Get-Item $outputName).Length / 1MB
+          $dllSize = (Get-Item $dllDest).Length / 1KB
+          Write-Host ""
+          Write-Host "Build Results:" -ForegroundColor Cyan
+          Write-Host "  Executable: $([math]::Round($exeSize, 2)) MB" -ForegroundColor White
+          Write-Host "  DLL: $([math]::Round($dllSize, 2)) KB" -ForegroundColor White
+      
+      - name: Test executable
+        shell: pwsh
+        run: |
+          Set-Location ntpi_dumper_go_version
+          
+          $exeName = "ntpi-dumper-cgo.exe"
+          $dllName = "liblzma-5.dll"
+          
+          Write-Host "Testing $exeName..." -ForegroundColor Cyan
+          
+          # Test version
+          Write-Host "`n[Test 1/2] Testing --version..." -ForegroundColor Yellow
+          & ".\$exeName" --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: Version test failed!" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "✓ Version test passed" -ForegroundColor Green
+          
+          # Test help
+          Write-Host "`n[Test 2/2] Testing --help..." -ForegroundColor Yellow
+          & ".\$exeName" --help
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: Help test failed!" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "✓ Help test passed" -ForegroundColor Green
+          
+          Write-Host "`n✓ All tests passed!" -ForegroundColor Green
+      
+      - name: Calculate SHA256
+        id: sha256
+        shell: pwsh
+        run: |
+          Set-Location ntpi_dumper_go_version
+          
+          $exeName = "ntpi-dumper-cgo.exe"
+          $dllName = "liblzma-5.dll"
+          
+          # Hash executable
+          $exeHash = (Get-FileHash -Path $exeName -Algorithm SHA256).Hash
+          echo "exe_sha256=$exeHash" >> $env:GITHUB_OUTPUT
+          "$exeHash  $exeName" | Out-File -FilePath "$exeName.sha256" -Encoding ascii
+          Write-Host "SHA256 ($exeName): $exeHash"
+          echo "::notice title=SHA256 for $exeName::$exeHash"
+          
+          # Hash DLL
+          $dllHash = (Get-FileHash -Path $dllName -Algorithm SHA256).Hash
+          echo "dll_sha256=$dllHash" >> $env:GITHUB_OUTPUT
+          "$dllHash  $dllName" | Out-File -FilePath "$dllName.sha256" -Encoding ascii
+          Write-Host "SHA256 ($dllName): $dllHash"
+          echo "::notice title=SHA256 for $dllName::$dllHash"
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ntpi-dumper-cgo
+          path: |
+            ntpi_dumper_go_version/ntpi-dumper-cgo.exe
+            ntpi_dumper_go_version/liblzma-5.dll
+            ntpi_dumper_go_version/ntpi-dumper-cgo.exe.sha256
+            ntpi_dumper_go_version/liblzma-5.dll.sha256
+          retention-days: 90
+
+  create-release:
+    name: Create Release
+    needs: build-go-cgo
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          files: |
+            artifacts/ntpi-dumper-cgo/*.exe
+            artifacts/ntpi-dumper-cgo/*.dll
+            artifacts/ntpi-dumper-cgo/*.sha256
+          body: |
+            ## NTPI Dumper Go (CGO Version) - High Performance
+            
+            ### 🚀 Performance Build
+            This release includes the **CGO-enabled** version of NTPI Dumper Go, which uses native C libraries for **10-20x faster** LZMA2 decompression compared to pure Go implementation.
+            
+            ### 📦 Downloads
+            
+            #### Windows x64
+            - **ntpi-dumper-cgo.exe** - Main executable
+            - **liblzma-5.dll** - Required LZMA library (keep in same folder)
+            
+            ### 📋 Usage
+            
+            1. Download both the `.exe` and `.dll` file
+            2. Keep them in the same directory
+            3. Run: `ntpi-dumper-cgo.exe <file.ntpi>`
+            
+            ### ✅ Verify Downloads
+            
+            Use the `.sha256` files to verify file integrity:
+            ```powershell
+            (Get-FileHash -Algorithm SHA256 ntpi-dumper-cgo.exe).Hash
+            ```
+            
+            ### 🔧 Requirements
+            
+            - Windows 7 or later (64-bit)
+            - Both .exe and .dll files must be in the same directory
+            
+            ### ⚡ Performance
+            
+            - **10-20x faster** LZMA2 decompression vs pure Go
+            - Multi-threaded extraction
+            - Optimized for large firmware files
+            
+            ---
+            
+            **Note:** This is the CGO version. For a standalone version without DLL dependencies, check the Python releases.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
