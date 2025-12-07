@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.env/
+.venv/
+virtualenv/
+
+# IDE and Editors
+.vscode/
+.idea/
+.eclipse/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# PyInstaller build output
+build/
+dist/
+*.spec.bak
+
+# NTPI firmware files (usually large binary files)
+*.ntpi
+*_extracted/
+*.mbn
+*.melf
+*.fv
+Patch.xml
+RawProgram.xml
+
+# Compiled executables
+*.exe
+*.dll
+ntpi_main.exe
+ntpi-dumper.exe
+
+# Go version build artifacts
+NTPI_DUMPER_GO/
+ntpi_dumper_go_version/*.exe
+ntpi_dumper_go_version/*.dll
+ntpi_dumper_go_version/ntpi-dumper
+ntpi_dumper_go_version/dist/
+
+# Downloaded dependencies
+xz_utils/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+.temp/
+temp/
+
+# OS specific
+Thumbs.db
+.DS_Store
+desktop.ini
+*.lnk
+
+# Test output
+test_output/
+output/
