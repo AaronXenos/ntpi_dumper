@@ -74,8 +74,8 @@ jobs:
           
           # Verify extraction
           $xzBinDir = "xz_utils\bin_x86-64"
-          if (-not (Test-Path "$xzBinDir\liblzma-5.dll")) {
-            Write-Host "Error: liblzma-5.dll not found after extraction" -ForegroundColor Red
+          if (-not (Test-Path "$xzBinDir\liblzma.dll")) {
+            Write-Host "Error: liblzma.dll not found after extraction" -ForegroundColor Red
             exit 1
           }
           
@@ -146,7 +146,7 @@ jobs:
           Write-Host "✓ Build successful!" -ForegroundColor Green
           
           # Copy DLL from downloaded XZ Utils
-          $dllSource = "..\xz_utils\bin_x86-64\liblzma-5.dll"
+          $dllSource = "..\xz_utils\bin_x86-64\liblzma.dll"
           $dllDest = "liblzma-5.dll"
           Copy-Item $dllSource -Destination $dllDest -Force
           Write-Host "✓ DLL copied" -ForegroundColor Green
