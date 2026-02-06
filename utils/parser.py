@@ -1,19 +1,24 @@
 """
 NTPI File Parser
 Handles parsing of NTPI file structure and region extraction.
+
+Supported header formats:
+- V1.3.0: 48-byte header with region_type + region_size for first region
+- V1.2.1: 40-byte header with only region_encrypted_size (no type field)
 """
 import ctypes
+import struct
 import time
 import xml.etree.ElementTree as ET
 from colorama import Fore, Style
 
 from .structures import (
-    NTPIHeader, RegionBlockHeader, get_aesdict_for_version
+    NTPIHeader, RegionHeader, RegionBlockHeader, get_aesdict_for_version
 )
 from .crypto import get_aes_key_iv_for_region, aes_cbc_decrypt
 
 
-def extract_region_data(file_data, region_header, offset, output_dir, keys_dict=None):
+def extract_region_data(file_data, region_header, offset, output_dir, keys_dict=None, key_region_index=None):
     """
     Extract and decrypt a region from the NTPI file.
     
@@ -23,6 +28,8 @@ def extract_region_data(file_data, region_header, offset, output_dir, keys_dict=
         offset: Byte offset where region data starts
         output_dir: Directory to save extracted files
         keys_dict: Dictionary of AES keys for decryption
+        key_region_index: Override region index for key selection (for v1.2.1
+                         where region_type isn't known before decryption)
     
     Returns:
         Tuple of (next_offset, next_region_header) or (-1, None) if no more regions
@@ -36,7 +43,10 @@ def extract_region_data(file_data, region_header, offset, output_dir, keys_dict=
         5: "FileIndex",
         6: "Region6"
     }
-    region_name = region_names.get(region_header.region_type, f"Unknown{region_header.region_type}")
+
+    # Determine which key to use: explicit index takes priority
+    key_index = key_region_index if key_region_index is not None else region_header.region_type
+    region_name = region_names.get(key_index, f"Unknown{key_index}")
     
     # Validate region boundaries
     if offset + region_header.region_size > len(file_data):
@@ -47,7 +57,7 @@ def extract_region_data(file_data, region_header, offset, output_dir, keys_dict=
     region_data = file_data[offset:offset + region_header.region_size]
     
     # Region6 contains encrypted file blocks, save as-is for later processing
-    if region_header.region_type == 6:
+    if key_index == 6:
         output_file = output_dir / "region6block.bin"
         with open(output_file, 'wb') as f:
             f.write(region_data)
@@ -56,7 +66,7 @@ def extract_region_data(file_data, region_header, offset, output_dir, keys_dict=
     # Get decryption keys for this region
     key, iv = None, None
     if keys_dict:
-        key, iv = get_aes_key_iv_for_region(region_header.region_type, keys_dict)
+        key, iv = get_aes_key_iv_for_region(key_index, keys_dict)
     
     # Decrypt the region data
     decrypted_data = aes_cbc_decrypt(region_data, key, iv)
@@ -76,7 +86,7 @@ def extract_region_data(file_data, region_header, offset, output_dir, keys_dict=
     actual_data = decrypted_data[data_offset:data_offset + block_header.real_size]
     
     # Save to file (KeyMap is binary, others are XML)
-    if region_header.region_type == 4:
+    if key_index == 4:
         output_file = output_dir / f"{region_name}.bin"
     else:
         output_file = output_dir / f"{region_name}.xml"
@@ -140,29 +150,75 @@ def parse_ntpi_file(file_path, output_dir):
     # Check if version is supported
     if keys_dict is None:
         print(f"{Fore.RED}Error: Unsupported firmware version {ntpi_header.version_major}.{ntpi_header.version_minor}.{ntpi_header.version_patch}{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}This version is not currently supported. Please add AES keys to utils/structures.py{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}Supported versions:{Style.RESET_ALL}")
-        from .structures import VERSION_KEY_MAP
+        
+        # Check if version is defined but keys are TODO placeholders
+        from .structures import VERSION_KEY_MAP, validate_keys
+        version_tuple = (ntpi_header.version_major, ntpi_header.version_minor, ntpi_header.version_patch)
+        if version_tuple in VERSION_KEY_MAP:
+            print(f"{Fore.YELLOW}This version is recognized but AES keys have not been extracted yet.{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Action required: Extract AES keys from imageChecker.dll using IDA Pro{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Update the keys in utils/structures.py (AESDICT_V{ntpi_header.version_major}_{ntpi_header.version_minor}_{ntpi_header.version_patch}){Style.RESET_ALL}")
+        else:
+            print(f"{Fore.YELLOW}This version is not currently supported. Please add AES keys to utils/structures.py{Style.RESET_ALL}")
+        
+        print(f"{Fore.YELLOW}Supported versions with valid keys:{Style.RESET_ALL}")
         for ver in VERSION_KEY_MAP.keys():
-            print(f"{Fore.CYAN}  - Version {ver[0]}.{ver[1]}.{ver[2]}{Style.RESET_ALL}")
+            ver_str = f"{ver[0]}.{ver[1]}.{ver[2]}"
+            if validate_keys(VERSION_KEY_MAP[ver], ver_str):
+                print(f"{Fore.GREEN}  ✓ Version {ver_str}{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}  ✗ Version {ver_str} (keys pending extraction){Style.RESET_ALL}")
         return False
     
     print(f"{Fore.CYAN}Using AES keys for version {ntpi_header.version_major}.{ntpi_header.version_minor}.{ntpi_header.version_patch}{Style.RESET_ALL}")
 
+    # Determine header format based on version
+    version_tuple = (ntpi_header.version_major, ntpi_header.version_minor, ntpi_header.version_patch)
+
+    if version_tuple == (1, 2, 1):
+        # V1.2.1 header: 40 bytes total
+        #   [0:32]  common header (magic + padding + 3 version u64s)
+        #   [32:40] first region encrypted blob size (u64)
+        # Region data starts at offset 40. Region type is NOT in the header;
+        # it's inside the encrypted RegionBlockHeader.
+        first_enc_size = struct.unpack_from('<Q', file_data, 32)[0]
+        current_offset = 40
+        # Create synthetic RegionHeader: we don't know the type yet,
+        # but we know size. We use key_region_index override below.
+        current_region = RegionHeader()
+        current_region.region_type = 0  # unknown from header
+        current_region.region_size = first_enc_size
+        region_index = 1  # regions always appear in order 1,2,3,4,5,6
+        print(f"{Fore.CYAN}V1.2.1 header: region data starts at offset 40, first enc size = 0x{first_enc_size:x}{Style.RESET_ALL}")
+    else:
+        # V1.3.0+ header: 48 bytes with region_type + region_size at offset 32
+        current_offset = ctypes.sizeof(NTPIHeader)
+        current_region = ntpi_header.first_region_header
+        region_index = current_region.region_type
+
     # Process all regions in sequence
-    current_offset = ctypes.sizeof(NTPIHeader)
-    current_region = ntpi_header.first_region_header
     region_count = 0
     
     while current_region and current_region.region_size > 0:
         region_count += 1
-        result = extract_region_data(file_data, current_region, current_offset, output_dir, keys_dict)
+        result = extract_region_data(
+            file_data, current_region, current_offset, output_dir, keys_dict,
+            key_region_index=region_index if version_tuple == (1, 2, 1) else None
+        )
         if isinstance(result, tuple):
             next_offset, next_region = result
             if next_offset == -1:
+                # Region 6 was saved; check if we need to process remaining
+                if version_tuple == (1, 2, 1) and region_index < 6:
+                    # Still have regions to go, but Region6 was hit
+                    break
                 break
             current_offset = next_offset
             current_region = next_region
+            if version_tuple == (1, 2, 1):
+                region_index += 1
+            else:
+                region_index = current_region.region_type if current_region else 0
         else:
             break
     

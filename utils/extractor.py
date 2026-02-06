@@ -8,6 +8,7 @@ import ctypes
 import time
 import hashlib
 import lzma
+import mmap
 import multiprocessing
 from pathlib import Path
 from tqdm import tqdm
@@ -19,32 +20,42 @@ from .crypto import extract_key_from_keymap, decrypt_NTEncode_data
 
 
 # ===== Global variables for multiprocessing workers =====
-G_REGION6_DATA = None  # Shared region6 data containing all encrypted file blocks
-G_KEYMAP_DATA = None  # Shared keymap data for AES decryption keys
-G_PBAR_LOCK = None  # Lock for synchronized console output
+G_REGION6_DATA = None  # Memory-mapped region6 data (or bytes fallback)
+G_REGION6_FILE = None  # File handle kept alive while mmap is active
+G_KEYMAP_DATA = None   # Keymap data for AES decryption keys (4KB)
+G_PBAR_LOCK = None     # Lock for synchronized console output
 G_COMPLETED_COUNTER = None  # Atomic counter for tracking completed files
 
 
-def init_worker(region6_data_blob, keymap_data_blob, pbar_lock, completed_counter):
+def init_worker(region6_path, keymap_path, pbar_lock, completed_counter):
     """
     Initialize global variables in each worker process.
     
-    This function is called once when each worker process starts,
-    to set up shared data that all workers need access to.
+    Uses memory-mapped files for Region6 access to avoid loading
+    the entire file (3+ GB) into each worker's memory. The OS
+    manages paging and deduplicates physical pages across workers.
     
     Args:
-        region6_data_blob: Complete Region6 data (encrypted file blocks)
-        keymap_data_blob: KeyMap data (AES keys)
+        region6_path: Path to region6block.bin file
+        keymap_path: Path to KeyMap.bin file
         pbar_lock: Multiprocessing lock for synchronized output
         completed_counter: Shared counter for progress tracking
     """
-    global G_REGION6_DATA, G_KEYMAP_DATA, G_PBAR_LOCK, G_COMPLETED_COUNTER
-    G_REGION6_DATA = region6_data_blob
-    G_KEYMAP_DATA = keymap_data_blob
+    global G_REGION6_DATA, G_REGION6_FILE, G_KEYMAP_DATA, G_PBAR_LOCK, G_COMPLETED_COUNTER
+    
+    # Memory-map the region6 file (read-only)
+    # Each worker gets its own mmap view, but the OS shares physical pages
+    G_REGION6_FILE = open(region6_path, 'rb')
+    G_REGION6_DATA = mmap.mmap(G_REGION6_FILE.fileno(), 0, access=mmap.ACCESS_READ)
+    
+    # Load keymap into memory (only ~4KB, negligible)
+    with open(keymap_path, 'rb') as f:
+        G_KEYMAP_DATA = f.read()
+    
     G_PBAR_LOCK = pbar_lock
     G_COMPLETED_COUNTER = completed_counter
     
-    # Validate that data was successfully shared
+    # Validate that data was successfully initialized
     if G_REGION6_DATA is None or G_KEYMAP_DATA is None:
         print(f"{Fore.RED}Critical error in worker: global data is not initialized.{Style.RESET_ALL}")
         sys.exit(1)
@@ -529,19 +540,9 @@ def stage2_extract_files(temp_dir, final_output_dir, all_files=True, process_cou
         print(f"{Fore.GREEN}Detected {len(large_files)} large file(s) (>=500MB), will use multi-threaded acceleration{Style.RESET_ALL}")
         print(f"{Fore.CYAN}Strategy: Process {len(small_files)} small files first, then large files{Style.RESET_ALL}")
     
-    # Load Region6 and KeyMap into memory for fast access
-    print(f"Loading data into memory...")
-    try:
-        with open(region6_path, 'rb') as f:
-            region6_data = f.read()
-        with open(keymap_path, 'rb') as f:
-            keymap_data = f.read()
-    except MemoryError:
-        print(f"{Fore.RED}Fatal: Out of memory. Please use a machine with more RAM.{Style.RESET_ALL}")
-        exit(1)
-    except Exception as e:
-        print(f"{Fore.RED}Fatal: Failed to load required data into memory: {e}{Style.RESET_ALL}")
-        exit(1)
+    # Get region6 file size for progress info (without loading into memory)
+    region6_size = region6_path.stat().st_size
+    print(f"Region6 size: {region6_size / (1024**3):.2f} GB (using memory-mapped I/O)")
 
     # Determine number of worker processes
     PROCESS_COUNT = process_count if process_count else os.cpu_count() or 8
@@ -568,14 +569,12 @@ def stage2_extract_files(temp_dir, final_output_dir, all_files=True, process_cou
     ]
 
     # Create multiprocessing pool and process all files
+    # Workers use mmap for region6 access (no pickle/copy of multi-GB data)
     with multiprocessing.Pool(
             processes=PROCESS_COUNT,
             initializer=init_worker,
-            initargs=(region6_data, keymap_data, pbar_lock, completed_counter)
+            initargs=(str(region6_path), str(keymap_path), pbar_lock, completed_counter)
     ) as pool:
-        # Delete local references (data is now shared with workers)
-        del region6_data
-        del keymap_data
         
         try:
             # Start async processing of all tasks
