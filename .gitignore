@@ -71,3 +71,74 @@ desktop.ini
 # Test output
 test_output/
 output/
+
+# ===== Research & scratch files (reverse engineering work) =====
+# Analysis scripts
+analyze_*.py
+test_*.py
+prove_*.py
+check_*.py
+compare_*.py
+detailed_*.py
+verify_*.py
+search_*.py
+find_*.py
+wait_for_*.py
+simple_extractor.py
+ida_key_extractor.py
+extract_*.py
+automated_*.py
+imagechecker_debug_plan.py
+flash_with_debugger.py
+flash_dll_key_candidates.txt
+memory_key_scanner.py
+memory_scanner.py
+usb_capture_logger.py
+
+# x32dbg / x64dbg automation
+x32dbg_*.py
+x64dbg_*.py
+x64dbg_*.txt
+launch_x64dbg.bat
+
+# Frida scripts
+frida_*.py
+
+# Arduino / BadUSB experiments
+*.ino
+
+# Memory dumps
+*.bin
+!utils/*.bin
+
+# Research markdown docs
+BADUSB_*.md
+BAD_USB_*.md
+EMERGENCY_*.md
+FLASH_DEBUG_*.md
+FRIDA_*.md
+KEY_EXTRACTION_*.txt
+NTPI_V1.2.1_*.md
+QFIL_*.md
+QUICK_START_USB_*.md
+SESSION_SUMMARY_*.md
+USB_SNIFFER_*.md
+V121_*.md
+WICHTIG_*.txt
+
+# Research directories
+.temp_test/
+hook_dll/
+firmware/
+src_repo/
+sda
+
+# Misc scratch
+AUTO_EXTRACT.bat
+EXTRACT_KEY.bat
+NT_Flash_Log_*.txt
+hexdump_rndm.*
+quick_extract_*.py
+
+# VS Code workspace file (user-specific)
+*.code-workspace
