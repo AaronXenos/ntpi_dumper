@@ -7,7 +7,9 @@
 
 NTPI firmware extraction tool for Nothing Phone with multi-threaded optimization for large files.
 
-**Supports:** NTPI version 1.3.0
+**Supported Versions:**
+- ✅ NTPI version 1.3.0 (fully supported)
+- ✅ NTPI version 1.2.1 (fully supported — keys extracted via IDA Pro)
 
 **💬 Issues, Pull Requests, and Forks are welcome!**
 
@@ -94,7 +96,6 @@ pyinstaller ntpi_main.spec
 
 ## Known Limitations
 
-- Currently supports NTPI version 1.3.0 only
 - Some extracted files may require further processing
 - Windows only (Linux/macOS support planned)
 
@@ -102,19 +103,11 @@ pyinstaller ntpi_main.spec
 
 We are actively seeking solutions for the following critical issues:
 
-### 1. Performance Issues
-- **Large file processing** - Extraction speed degrades significantly with files > 2GB
-- **Memory usage** - High memory consumption during parallel processing
-- **I/O bottleneck** - Disk write operations become bottleneck on slower drives
+### 1. Version Compatibility
+- **New NTPI versions** - Future firmware updates may introduce new encryption keys or format changes
+- **Format variations** - Different NTPI versions may have different encryption/compression schemes
 
-**Contributions welcome:** Optimization strategies, alternative algorithms, or architectural improvements.
-
-### 2. Version Compatibility Issues
-- **NTPI version detection** - Need automatic version detection mechanism
-- **Multi-version support** - Currently only supports v1.3.0, need support for other versions
-- **Format changes** - Different NTPI versions may have different encryption/compression schemes
-
-**Contributions welcome:** Version detection code, decryption keys for other versions, or documentation about NTPI format variations.
+**Contributions welcome:** Keys for new firmware versions, documentation about NTPI format variations.
 
 If you have expertise in these areas or access to different NTPI versions for testing, please open an issue or submit a PR!
 

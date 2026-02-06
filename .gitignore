@@ -139,6 +139,8 @@ EXTRACT_KEY.bat
 NT_Flash_Log_*.txt
 hexdump_rndm.*
 quick_extract_*.py
+find_partition_info.*
+key_extractor_*.py
 
 # VS Code workspace file (user-specific)
 *.code-workspace
